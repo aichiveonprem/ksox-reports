@@ -256,7 +256,7 @@
   <!-- STEP 3: Results -->
   <section class="card step3 hidden" id="resultCard" aria-labelledby="s3">
     <div class="step-label" id="s3"><span class="step-num">3</span> 조회 결과</div>
-    <p class="filters-help">박스를 클릭하면 해당 사업자만 보고, 그 상태로 엑셀이 다운로드됩니다. 다시 누르면 전체로 돌아갑니다.</p>
+    <p class="filters-help">박스를 클릭해 원하는 조건만 골라 보세요. <b>여러 개를 동시에 선택</b>할 수 있고(상태끼리·과세유형끼리는 함께, 상태+과세유형은 모두 만족), 선택된 사업자만 엑셀로 다운로드됩니다. 다시 누르면 해제, 「전체」를 누르면 초기화됩니다.</p>
     <div class="filters" id="filters"></div>
     <div class="actions" style="margin-top:16px;margin-bottom:18px">
       <button class="btn btn-primary" id="dlBtn">⬇ 엑셀 다운로드</button>
@@ -287,7 +287,7 @@ let rows = [];              // 선택 시트의 2차원 배열 (헤더 포함)
 let headers = [];           // 헤더 행
 let results = [];           // 최종 결과 [{bno, raw, b_stt, tax_type, end_dt, _cls, _tax}]
 let busy = false;
-let activeFilter = null;    // null(전체) | {g:'status'|'tax', v:'ok'|'simple'...}
+let selected = new Set();   // 다중 선택. 키 형식 "status:ok" | "tax:simple". 비어있으면 전체
 
 // 칩 정의
 const STATUS_DEFS = [
@@ -448,7 +448,7 @@ async function runQuery() {
   runLabel.innerHTML = '<span class="spinner"></span> 조회 중…';
   progWrap.classList.remove("hidden");
   results = [];
-  activeFilter = null;
+  selected.clear();
 
   const byBno = new Map(); // 중복 사업자번호 응답 공유
   const uniqueBnos = [...new Set(items.map((x) => x.bno))];
@@ -545,16 +545,20 @@ function classify(it, d) {
   };
 }
 
-// ---------- 필터 ----------
+// ---------- 필터 (다중 선택: 같은 그룹 OR, 그룹 간 AND) ----------
+function keyOf(filter) { return filter.g + ":" + filter.v; }
 function matchFilter(r) {
-  if (!activeFilter) return true;
-  if (activeFilter.g === "status") return r._cls === activeFilter.v;
-  return r._tax === activeFilter.v;
+  if (selected.size === 0) return true;
+  const statusSel = [], taxSel = [];
+  selected.forEach((k) => { const i = k.indexOf(":"); const g = k.slice(0, i), v = k.slice(i + 1); (g === "status" ? statusSel : taxSel).push(v); });
+  if (statusSel.length && !statusSel.includes(r._cls)) return false;  // 상태 그룹 OR
+  if (taxSel.length && !taxSel.includes(r._tax)) return false;        // 과세유형 그룹 OR
+  return true;                                                        // 그룹 간 AND
 }
 function getFiltered() { return results.filter(matchFilter); }
 function isActive(filter) {
-  if (filter === null) return !activeFilter;
-  return !!activeFilter && activeFilter.g === filter.g && activeFilter.v === filter.v;
+  if (filter === null) return selected.size === 0;
+  return selected.has(keyOf(filter));
 }
 
 // ---------- 결과 렌더 ----------
@@ -573,9 +577,12 @@ function makeChip(filter, label, count, cls) {
   b.setAttribute("aria-pressed", act ? "true" : "false");
   b.innerHTML = `<span class="chip-dot"></span><span>${label}</span><b>${count.toLocaleString()}</b>`;
   b.addEventListener("click", () => {
-    if (filter === null) activeFilter = null;
-    else if (isActive(filter)) activeFilter = null; // 같은 칩 다시 누르면 전체로
-    else activeFilter = filter;
+    if (filter === null) { selected.clear(); }       // 전체 = 선택 비움
+    else {
+      const k = keyOf(filter);
+      if (selected.has(k)) selected.delete(k);        // 토글 해제
+      else selected.add(k);                           // 다중 선택 추가
+    }
     renderResults();
   });
   return b;
@@ -613,7 +620,7 @@ function renderTable() {
     });
     resultBody.appendChild(frag);
   }
-  const label = activeFilter ? "현재 필터" : "전체";
+  const label = selected.size ? "현재 필터" : "전체";
   $("dlHint").textContent = `${label} ${list.length.toLocaleString()}건이 다운로드됩니다`;
 }
 
@@ -644,16 +651,20 @@ function downloadExcel() {
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, "조회결과");
   const stamp = new Date().toISOString().slice(0, 10);
-  const tag = activeFilter ? "_" + filterTag() : "";
+  const tag = selected.size ? "_" + filterTag() : "";
   XLSX.writeFile(wb, `사업자상태조회${tag}_${stamp}.xlsx`);
   toast(`${filtered.length.toLocaleString()}건 다운로드 완료`);
 }
 
 function filterTag() {
-  if (!activeFilter) return "";
-  const all = activeFilter.g === "status" ? STATUS_DEFS : TAX_DEFS;
-  const d = all.find((x) => x.v === activeFilter.v);
-  return d ? d.label.replace(/[\/\s]/g, "") : activeFilter.v;
+  if (selected.size === 0) return "";
+  if (selected.size === 1) {
+    const k = [...selected][0], i = k.indexOf(":"), g = k.slice(0, i), v = k.slice(i + 1);
+    const all = g === "status" ? STATUS_DEFS : TAX_DEFS;
+    const d = all.find((x) => x.v === v);
+    return d ? d.label.replace(/[\/\s]/g, "") : v;
+  }
+  return "필터" + selected.size + "종";
 }
 </script>
 </body>
