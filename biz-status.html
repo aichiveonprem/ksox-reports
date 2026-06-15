@@ -1,0 +1,562 @@
+<!DOCTYPE html>
+<!--
+  사업자등록상태 일괄 조회 도구 (Business Registration Status Bulk Checker)
+
+  엑셀 파일을 업로드하고 사업자등록번호 칼럼을 선택하면 국세청 공공데이터포털
+  "사업자등록정보 진위확인 및 상태조회" API로 계속/휴업/폐업 상태와 과세유형을
+  100건 단위 배치로 일괄 조회한다. 결과는 화면 표와 통계로 보여주고, 원본 행에
+  조회 결과 칼럼을 덧붙여 엑셀(.xlsx)로 다운로드한다.
+
+  - 외부 의존성: SheetJS(xlsx) — CDN 로드
+  - API: https://api.odcloud.kr/api/nts-businessman/v1/status (CORS 허용 확인됨)
+  - 인증키: data.go.kr 무료 발급, 화면 입력 후 localStorage 저장 (서버 전송 없음)
+  - 단일 파일: 브라우저에서 더블클릭으로 실행
+-->
+<html lang="ko" class="dark">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>사업자등록상태 일괄 조회</title>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<style>
+  :root { color-scheme: dark light; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif;
+    background: #09090b; color: #fafafa;
+    min-height: 100vh; line-height: 1.5;
+    transition: background .2s ease, color .2s ease;
+  }
+  body.light { background: #fafafa; color: #18181b; }
+
+  .wrap { max-width: 1100px; margin: 0 auto; padding: 24px 16px 80px; }
+  @media (min-width: 768px) { .wrap { padding: 40px 32px 80px; } }
+
+  /* Header */
+  header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 28px; }
+  .title { display: flex; align-items: center; gap: 12px; }
+  .logo { width: 40px; height: 40px; border-radius: 10px; background: linear-gradient(135deg, #4f46e5, #6366f1);
+          display: grid; place-items: center; font-size: 20px; box-shadow: 0 4px 14px rgba(79,70,229,.3); flex-shrink: 0; }
+  h1 { font-size: 19px; font-weight: 700; margin: 0; letter-spacing: -.02em; }
+  .sub { font-size: 13px; color: #a1a1aa; margin: 2px 0 0; }
+  body.light .sub { color: #71717a; }
+
+  .icon-btn { width: 38px; height: 38px; border-radius: 9px; border: 1px solid #27272a; background: #18181b;
+              color: #a1a1aa; cursor: pointer; font-size: 17px; transition: all .15s ease; flex-shrink: 0;
+              display: grid; place-items: center; }
+  .icon-btn:hover { background: #27272a; color: #fafafa; transform: translateY(-1px); }
+  body.light .icon-btn { background: #fff; border-color: #e4e4e7; color: #71717a; }
+  body.light .icon-btn:hover { background: #f4f4f5; color: #18181b; }
+  .icon-btn:focus-visible { outline: none; box-shadow: 0 0 0 2px #6366f1; }
+
+  /* Card */
+  .card { background: #18181b; border: 1px solid rgba(39,39,42,.7); border-radius: 14px;
+          padding: 22px; margin-bottom: 18px; animation: fadeUp .5s ease both; }
+  body.light .card { background: #fff; border-color: #e4e4e7; box-shadow: 0 1px 3px rgba(0,0,0,.04); }
+  .card.step2 { animation-delay: .06s; }
+  .card.step3 { animation-delay: .12s; }
+  @keyframes fadeUp { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+
+  .step-label { display: inline-flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 600;
+                color: #818cf8; text-transform: uppercase; letter-spacing: .05em; margin-bottom: 14px; }
+  body.light .step-label { color: #4f46e5; }
+  .step-num { width: 20px; height: 20px; border-radius: 6px; background: rgba(99,102,241,.15);
+              color: #818cf8; display: grid; place-items: center; font-size: 11px; }
+  body.light .step-num { background: rgba(79,70,229,.1); color: #4f46e5; }
+
+  label.flabel { display: block; font-size: 13px; font-weight: 500; color: #d4d4d8; margin-bottom: 7px; }
+  body.light label.flabel { color: #3f3f46; }
+
+  input[type=text], input[type=password], select {
+    width: 100%; padding: 10px 12px; border-radius: 9px; border: 1px solid #3f3f46;
+    background: #09090b; color: #fafafa; font-size: 14px; font-family: inherit;
+    transition: all .15s ease;
+  }
+  body.light input[type=text], body.light input[type=password], body.light select {
+    background: #fff; border-color: #d4d4d8; color: #18181b; }
+  input:focus, select:focus { outline: none; border-color: #6366f1; box-shadow: 0 0 0 3px rgba(99,102,241,.15); }
+  select { cursor: pointer; -webkit-appearance: none; appearance: none;
+           background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23a1a1aa' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+           background-repeat: no-repeat; background-position: right 10px center; padding-right: 34px; }
+
+  .key-row { display: flex; gap: 8px; align-items: flex-end; }
+  .key-row > div { flex: 1; }
+  .hint { font-size: 12px; color: #71717a; margin-top: 7px; }
+  .hint a { color: #818cf8; text-decoration: none; }
+  .hint a:hover { text-decoration: underline; }
+
+  /* Drop zone */
+  .drop { border: 1.5px dashed #3f3f46; border-radius: 11px; padding: 32px 20px; text-align: center;
+          cursor: pointer; transition: all .2s ease; }
+  .drop:hover, .drop.over { border-color: #6366f1; background: rgba(99,102,241,.05); }
+  body.light .drop { border-color: #d4d4d8; }
+  .drop .di { font-size: 30px; margin-bottom: 8px; opacity: .8; }
+  .drop .dt { font-size: 14px; font-weight: 500; }
+  .drop .ds { font-size: 12px; color: #71717a; margin-top: 4px; }
+  .file-name { font-size: 13px; color: #818cf8; margin-top: 12px; font-weight: 500; }
+
+  .grid2 { display: grid; grid-template-columns: 1fr; gap: 14px; margin-top: 14px; }
+  @media (min-width: 600px) { .grid2 { grid-template-columns: 1fr 1fr; } }
+
+  /* Button */
+  .btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+         padding: 11px 20px; border-radius: 10px; border: none; font-size: 14px; font-weight: 600;
+         font-family: inherit; cursor: pointer; transition: all .15s ease; }
+  .btn-primary { background: #4f46e5; color: #fff; box-shadow: 0 2px 8px rgba(79,70,229,.3); }
+  .btn-primary:hover:not(:disabled) { background: #4338ca; transform: translateY(-1px); box-shadow: 0 4px 14px rgba(79,70,229,.4); }
+  .btn-primary:active:not(:disabled) { transform: scale(.98); }
+  .btn:disabled { opacity: .45; cursor: not-allowed; }
+  .btn-ghost { background: #27272a; color: #fafafa; }
+  .btn-ghost:hover:not(:disabled) { background: #3f3f46; }
+  body.light .btn-ghost { background: #f4f4f5; color: #18181b; }
+  body.light .btn-ghost:hover:not(:disabled) { background: #e4e4e7; }
+  .btn:focus-visible { outline: none; box-shadow: 0 0 0 3px rgba(99,102,241,.5); }
+  .actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 18px; }
+
+  /* Progress */
+  .progress-wrap { margin-top: 16px; }
+  .bar { height: 8px; border-radius: 99px; background: #27272a; overflow: hidden; }
+  body.light .bar { background: #e4e4e7; }
+  .bar > i { display: block; height: 100%; border-radius: 99px; background: linear-gradient(90deg,#4f46e5,#818cf8);
+             width: 0%; transition: width .3s ease; }
+  .progress-text { font-size: 12px; color: #a1a1aa; margin-top: 8px; }
+
+  /* Stats */
+  .stats { display: grid; grid-template-columns: repeat(2,1fr); gap: 10px; margin-bottom: 18px; }
+  @media (min-width: 600px) { .stats { grid-template-columns: repeat(4,1fr); } }
+  .stat { background: #18181b; border: 1px solid rgba(39,39,42,.7); border-radius: 11px; padding: 14px 16px;
+          animation: fadeUp .4s ease both; }
+  body.light .stat { background: #fff; border-color: #e4e4e7; }
+  .stat .v { font-size: 24px; font-weight: 700; letter-spacing: -.02em; }
+  .stat .k { font-size: 12px; color: #a1a1aa; margin-top: 2px; }
+  body.light .stat .k { color: #71717a; }
+  .stat.ok .v { color: #22c55e; } .stat.warn .v { color: #f59e0b; }
+  .stat.bad .v { color: #ef4444; } .stat.na .v { color: #a1a1aa; }
+
+  /* Table */
+  .table-scroll { overflow-x: auto; border-radius: 11px; border: 1px solid rgba(39,39,42,.7); }
+  body.light .table-scroll { border-color: #e4e4e7; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 560px; }
+  th { text-align: left; padding: 11px 14px; font-weight: 600; color: #a1a1aa; background: #18181b;
+       border-bottom: 1px solid rgba(39,39,42,.9); white-space: nowrap; position: sticky; top: 0; }
+  body.light th { background: #fafafa; color: #52525b; border-color: #e4e4e7; }
+  td { padding: 10px 14px; border-bottom: 1px solid rgba(39,39,42,.5); }
+  body.light td { border-color: #f0f0f1; }
+  tbody tr:hover { background: rgba(255,255,255,.03); }
+  body.light tbody tr:hover { background: #fafafa; }
+  .bno { font-variant-numeric: tabular-nums; font-family: 'SF Mono', ui-monospace, monospace; }
+
+  .badge { display: inline-flex; align-items: center; gap: 5px; padding: 3px 9px; border-radius: 99px;
+           font-size: 12px; font-weight: 600; white-space: nowrap; }
+  .badge.ok { background: rgba(34,197,94,.15); color: #4ade80; }
+  .badge.warn { background: rgba(245,158,11,.15); color: #fbbf24; }
+  .badge.bad { background: rgba(239,68,68,.15); color: #f87171; }
+  .badge.na { background: rgba(161,161,170,.15); color: #a1a1aa; }
+  .badge .dot { width: 6px; height: 6px; border-radius: 99px; background: currentColor; }
+
+  .empty { text-align: center; padding: 50px 20px; color: #71717a; }
+  .empty .ei { font-size: 36px; margin-bottom: 10px; opacity: .5; }
+
+  .hidden { display: none !important; }
+  .toast { position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%) translateY(20px);
+           background: #27272a; color: #fafafa; padding: 12px 18px; border-radius: 10px; font-size: 13px;
+           box-shadow: 0 8px 24px rgba(0,0,0,.4); opacity: 0; transition: all .3s ease; pointer-events: none;
+           border: 1px solid #3f3f46; z-index: 100; max-width: 90vw; }
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  .toast.err { border-color: #ef4444; }
+  body.light .toast { background: #18181b; }
+
+  .spinner { width: 15px; height: 15px; border: 2px solid rgba(255,255,255,.3); border-top-color: #fff;
+             border-radius: 99px; animation: spin .7s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="title">
+      <div class="logo">🏢</div>
+      <div>
+        <h1>사업자등록상태 일괄 조회</h1>
+        <p class="sub">엑셀 업로드 → 칼럼 선택 → 국세청 일괄 조회 → 결과 다운로드</p>
+      </div>
+    </div>
+    <button class="icon-btn" id="themeBtn" aria-label="다크/라이트 모드 전환" title="테마 전환">🌙</button>
+  </header>
+
+  <!-- STEP 1: API Key -->
+  <section class="card" aria-labelledby="s1">
+    <div class="step-label" id="s1"><span class="step-num">1</span> 인증키</div>
+    <div class="key-row">
+      <div>
+        <label class="flabel" for="apiKey">공공데이터포털 인증키 (Encoding)</label>
+        <input type="password" id="apiKey" placeholder="data.go.kr에서 발급받은 일반 인증키(Encoding)를 붙여넣으세요" autocomplete="off" />
+      </div>
+      <button class="icon-btn" id="keyToggle" aria-label="인증키 표시" title="표시/숨김" style="margin-bottom:1px">👁</button>
+    </div>
+    <p class="hint">
+      <a href="https://www.data.go.kr/data/15081808/openapi.do" target="_blank" rel="noopener">국세청_사업자등록정보 진위확인 및 상태조회 서비스</a>
+      에서 무료 활용신청 → 마이페이지의 <b>일반 인증키(Encoding)</b>를 복사해 넣으세요. 키는 이 브라우저에만 저장되며 외부로 전송되지 않습니다.
+    </p>
+  </section>
+
+  <!-- STEP 2: Upload + column -->
+  <section class="card step2" aria-labelledby="s2">
+    <div class="step-label" id="s2"><span class="step-num">2</span> 엑셀 업로드 &amp; 칼럼 선택</div>
+    <div class="drop" id="drop" tabindex="0" role="button" aria-label="엑셀 파일 업로드">
+      <div class="di">📄</div>
+      <div class="dt">엑셀 파일을 끌어다 놓거나 클릭해서 선택</div>
+      <div class="ds">.xlsx / .xls / .csv 지원</div>
+      <div class="file-name hidden" id="fileName"></div>
+    </div>
+    <input type="file" id="fileInput" accept=".xlsx,.xls,.csv" class="hidden" />
+
+    <div class="grid2 hidden" id="colArea">
+      <div>
+        <label class="flabel" for="sheetSel">시트 선택</label>
+        <select id="sheetSel"></select>
+      </div>
+      <div>
+        <label class="flabel" for="colSel">사업자등록번호 칼럼</label>
+        <select id="colSel"></select>
+      </div>
+    </div>
+    <p class="hint hidden" id="rowInfo"></p>
+
+    <div class="actions">
+      <button class="btn btn-primary" id="runBtn" disabled>
+        <span id="runLabel">조회 시작</span>
+      </button>
+    </div>
+
+    <div class="progress-wrap hidden" id="progWrap">
+      <div class="bar"><i id="bar"></i></div>
+      <div class="progress-text" id="progText">준비 중…</div>
+    </div>
+  </section>
+
+  <!-- STEP 3: Results -->
+  <section class="card step3 hidden" id="resultCard" aria-labelledby="s3">
+    <div class="step-label" id="s3"><span class="step-num">3</span> 조회 결과</div>
+    <div class="stats" id="stats"></div>
+    <div class="actions" style="margin-top:0;margin-bottom:18px">
+      <button class="btn btn-primary" id="dlBtn">⬇ 엑셀 다운로드</button>
+      <button class="btn btn-ghost" id="dlBadBtn">폐업/휴업만 다운로드</button>
+    </div>
+    <div class="table-scroll">
+      <table id="resultTable">
+        <thead><tr>
+          <th>#</th><th>사업자번호</th><th>상태</th><th>과세유형</th><th>폐업일</th>
+        </tr></thead>
+        <tbody id="resultBody"></tbody>
+      </table>
+    </div>
+  </section>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+"use strict";
+const API_URL = "https://api.odcloud.kr/api/nts-businessman/v1/status";
+const BATCH = 100;          // API 1회 최대 100건
+const BATCH_DELAY = 250;    // 배치 간 지연(ms) — 과도한 호출 방지
+
+// ---------- 상태 ----------
+let workbook = null;        // SheetJS workbook
+let rows = [];              // 선택 시트의 2차원 배열 (헤더 포함)
+let headers = [];           // 헤더 행
+let results = [];           // 최종 결과 [{bno, raw, b_stt, tax_type, end_dt, _cls}]
+let busy = false;
+
+// ---------- DOM ----------
+const $ = (id) => document.getElementById(id);
+const drop = $("drop"), fileInput = $("fileInput"), fileName = $("fileName");
+const colArea = $("colArea"), sheetSel = $("sheetSel"), colSel = $("colSel"), rowInfo = $("rowInfo");
+const runBtn = $("runBtn"), runLabel = $("runLabel");
+const progWrap = $("progWrap"), bar = $("bar"), progText = $("progText");
+const resultCard = $("resultCard"), resultBody = $("resultBody"), statsEl = $("stats");
+
+// ---------- 테마 ----------
+(function initTheme() {
+  const saved = localStorage.getItem("bsc_theme");
+  if (saved === "light") { document.body.classList.add("light"); document.documentElement.classList.remove("dark"); $("themeBtn").textContent = "☀️"; }
+})();
+$("themeBtn").addEventListener("click", () => {
+  const light = document.body.classList.toggle("light");
+  $("themeBtn").textContent = light ? "☀️" : "🌙";
+  localStorage.setItem("bsc_theme", light ? "light" : "dark");
+});
+
+// ---------- 인증키 저장 ----------
+const apiKey = $("apiKey");
+apiKey.value = localStorage.getItem("bsc_apikey") || "";
+apiKey.addEventListener("input", () => localStorage.setItem("bsc_apikey", apiKey.value.trim()));
+$("keyToggle").addEventListener("click", () => {
+  apiKey.type = apiKey.type === "password" ? "text" : "password";
+});
+
+// ---------- 토스트 ----------
+let toastTimer = null;
+function toast(msg, isErr) {
+  const t = $("toast");
+  t.textContent = msg; t.classList.toggle("err", !!isErr); t.classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove("show"), 3200);
+}
+
+// ---------- 파일 업로드 ----------
+drop.addEventListener("click", () => fileInput.click());
+drop.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); fileInput.click(); } });
+drop.addEventListener("dragover", (e) => { e.preventDefault(); drop.classList.add("over"); });
+drop.addEventListener("dragleave", () => drop.classList.remove("over"));
+drop.addEventListener("drop", (e) => {
+  e.preventDefault(); drop.classList.remove("over");
+  if (e.dataTransfer.files.length) handleFile(e.dataTransfer.files[0]);
+});
+fileInput.addEventListener("change", (e) => { if (e.target.files.length) handleFile(e.target.files[0]); });
+
+function handleFile(file) {
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    try {
+      workbook = XLSX.read(e.target.result, { type: "array" });
+      fileName.textContent = "✓ " + file.name;
+      fileName.classList.remove("hidden");
+      // 시트 채우기
+      sheetSel.innerHTML = "";
+      workbook.SheetNames.forEach((n) => {
+        const o = document.createElement("option"); o.value = n; o.textContent = n; sheetSel.appendChild(o);
+      });
+      colArea.classList.remove("hidden");
+      loadSheet(workbook.SheetNames[0]);
+    } catch (err) {
+      console.error(err);
+      toast("엑셀 파일을 읽지 못했습니다. 파일 형식을 확인하세요.", true);
+    }
+  };
+  reader.onerror = () => toast("파일 읽기 실패", true);
+  reader.readAsArrayBuffer(file);
+}
+
+function loadSheet(name) {
+  const ws = workbook.Sheets[name];
+  rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "", raw: false });
+  // 빈 끝 행 제거
+  while (rows.length && rows[rows.length - 1].every((c) => String(c).trim() === "")) rows.pop();
+  if (!rows.length) { toast("시트가 비어 있습니다.", true); colSel.innerHTML = ""; rowInfo.classList.add("hidden"); runBtn.disabled = true; return; }
+  headers = rows[0].map((h, i) => String(h).trim() || `(칼럼 ${i + 1})`);
+  // 칼럼 셀렉트 채우기 + 자동 추측
+  colSel.innerHTML = "";
+  headers.forEach((h, i) => {
+    const o = document.createElement("option"); o.value = String(i); o.textContent = h; colSel.appendChild(o);
+  });
+  const guess = guessBnoColumn();
+  if (guess >= 0) colSel.value = String(guess);
+  updateRowInfo();
+  runBtn.disabled = false;
+}
+
+function guessBnoColumn() {
+  // 1) 헤더 이름으로 추측
+  const kw = ["사업자등록번호", "사업자번호", "사업자등록", "사업자", "bizno", "b_no", "등록번호"];
+  for (let i = 0; i < headers.length; i++) {
+    const h = headers[i].replace(/\s/g, "").toLowerCase();
+    if (kw.some((k) => h.includes(k.toLowerCase()))) return i;
+  }
+  // 2) 값 패턴(10자리 숫자)으로 추측
+  const sample = rows.slice(1, 21);
+  let best = -1, bestHit = 0;
+  for (let c = 0; c < headers.length; c++) {
+    let hit = 0;
+    for (const r of sample) { if (/^\d{10}$/.test(normalize(r[c]))) hit++; }
+    if (hit > bestHit) { bestHit = hit; best = c; }
+  }
+  return bestHit >= Math.max(1, Math.floor(sample.length * 0.3)) ? best : -1;
+}
+
+function updateRowInfo() {
+  const dataRows = rows.length - 1;
+  const col = parseInt(colSel.value, 10);
+  let valid = 0;
+  for (let i = 1; i < rows.length; i++) { if (/^\d{10}$/.test(normalize(rows[i][col]))) valid++; }
+  rowInfo.classList.remove("hidden");
+  rowInfo.innerHTML = `데이터 <b>${dataRows.toLocaleString()}</b>행 · 유효한 10자리 사업자번호 <b>${valid.toLocaleString()}</b>건` +
+    (valid < dataRows ? ` <span style="color:#fbbf24">(나머지 ${(dataRows - valid).toLocaleString()}건은 형식 불일치로 건너뜀)</span>` : "");
+}
+
+sheetSel.addEventListener("change", () => loadSheet(sheetSel.value));
+colSel.addEventListener("change", updateRowInfo);
+
+// ---------- 정규화: 숫자만 ----------
+function normalize(v) { return String(v == null ? "" : v).replace(/[^0-9]/g, ""); }
+
+// ---------- 조회 실행 ----------
+runBtn.addEventListener("click", runQuery);
+
+async function runQuery() {
+  if (busy) return;
+  const key = apiKey.value.trim();
+  if (!key) { toast("먼저 공공데이터포털 인증키를 입력하세요.", true); apiKey.focus(); return; }
+  if (!rows.length) { toast("엑셀 파일을 먼저 업로드하세요.", true); return; }
+
+  const col = parseInt(colSel.value, 10);
+  // 원본 행 인덱스와 함께 수집 (정규화 후 10자리만)
+  const items = [];
+  for (let i = 1; i < rows.length; i++) {
+    const raw = rows[i][col];
+    const bno = normalize(raw);
+    if (/^\d{10}$/.test(bno)) items.push({ rowIndex: i, raw: String(raw), bno });
+  }
+  if (!items.length) { toast("유효한 10자리 사업자번호가 없습니다. 칼럼 선택을 확인하세요.", true); return; }
+
+  busy = true; runBtn.disabled = true;
+  runLabel.innerHTML = '<span class="spinner"></span> 조회 중…';
+  progWrap.classList.remove("hidden");
+  results = [];
+
+  const byBno = new Map(); // 중복 사업자번호 응답 공유
+  const uniqueBnos = [...new Set(items.map((x) => x.bno))];
+  const total = uniqueBnos.length;
+  let done = 0, apiError = null;
+
+  try {
+    for (let s = 0; s < uniqueBnos.length; s += BATCH) {
+      const chunk = uniqueBnos.slice(s, s + BATCH);
+      const data = await queryBatch(key, chunk);
+      data.forEach((d) => byBno.set(d.b_no, d));
+      done += chunk.length;
+      const pct = Math.round((done / total) * 100);
+      bar.style.width = pct + "%";
+      progText.textContent = `조회 중… ${done.toLocaleString()} / ${total.toLocaleString()}건 (${pct}%)`;
+      if (s + BATCH < uniqueBnos.length) await sleep(BATCH_DELAY);
+    }
+  } catch (err) {
+    apiError = err;
+  }
+
+  if (apiError) {
+    busy = false; runBtn.disabled = false; runLabel.textContent = "조회 시작";
+    progWrap.classList.add("hidden");
+    toast("조회 실패: " + apiError.message, true);
+    return;
+  }
+
+  // 원본 행 순서대로 결과 구성
+  results = items.map((it) => {
+    const d = byBno.get(it.bno) || {};
+    return classify(it, d);
+  });
+
+  bar.style.width = "100%";
+  progText.textContent = `완료 · ${results.length.toLocaleString()}건 조회됨`;
+  busy = false; runBtn.disabled = false; runLabel.textContent = "다시 조회";
+  renderResults();
+  resultCard.classList.remove("hidden");
+  resultCard.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
+
+async function queryBatch(key, bnos) {
+  const url = API_URL + "?serviceKey=" + encodeURIComponent(key);
+  let res;
+  try {
+    res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Accept": "application/json" },
+      body: JSON.stringify({ b_no: bnos }),
+    });
+  } catch (e) {
+    throw new Error("네트워크 오류 (인터넷 연결 또는 CORS 확인)");
+  }
+  let json;
+  try { json = await res.json(); } catch (e) { throw new Error("응답 파싱 실패 (HTTP " + res.status + ")"); }
+  if (!res.ok) {
+    const msg = json && (json.msg || json.message) ? json.msg || json.message : "HTTP " + res.status;
+    throw new Error(msg);
+  }
+  if (json.status_code && json.status_code !== "OK") throw new Error(json.status_code);
+  // data.go.kr 인증키 오류 등은 res.ok=true에 data 없이 올 수 있음 → 조용히 전부 미등록 처리되는 함정 차단
+  if (!Array.isArray(json.data) || json.data.length === 0) {
+    const m = json && (json.msg || json.message) ? (json.msg || json.message) : "응답에 데이터가 없습니다 — 인증키(Encoding)나 요청 형식을 확인하세요";
+    throw new Error(m);
+  }
+  return json.data;
+}
+
+// 상태 분류: ok(계속) / warn(휴업) / bad(폐업) / na(미등록·확인불가)
+function classify(it, d) {
+  const code = d.b_stt_cd || "";
+  let cls = "na", stt = d.b_stt || "";
+  if (code === "01") { cls = "ok"; stt = stt || "계속사업자"; }
+  else if (code === "02") { cls = "warn"; stt = stt || "휴업자"; }
+  else if (code === "03") { cls = "bad"; stt = stt || "폐업자"; }
+  else { cls = "na"; stt = stt || (d.tax_type ? d.tax_type : "미등록/확인불가"); }
+  return {
+    rowIndex: it.rowIndex, bno: it.bno, raw: it.raw,
+    b_stt: stt, tax_type: d.tax_type || "", end_dt: d.end_dt || "",
+    _cls: cls,
+  };
+}
+
+// ---------- 결과 렌더 ----------
+function renderResults() {
+  const c = { ok: 0, warn: 0, bad: 0, na: 0 };
+  results.forEach((r) => c[r._cls]++);
+  statsEl.innerHTML = `
+    <div class="stat ok"><div class="v">${c.ok.toLocaleString()}</div><div class="k">계속사업자</div></div>
+    <div class="stat warn"><div class="v">${c.warn.toLocaleString()}</div><div class="k">휴업자</div></div>
+    <div class="stat bad"><div class="v">${c.bad.toLocaleString()}</div><div class="k">폐업자</div></div>
+    <div class="stat na"><div class="v">${c.na.toLocaleString()}</div><div class="k">미등록/확인불가</div></div>`;
+
+  resultBody.innerHTML = "";
+  const frag = document.createDocumentFragment();
+  results.forEach((r, i) => {
+    const tr = document.createElement("tr");
+    tr.innerHTML =
+      `<td style="color:#71717a">${i + 1}</td>` +
+      `<td class="bno">${fmtBno(r.bno)}</td>` +
+      `<td><span class="badge ${r._cls}"><span class="dot"></span>${esc(r.b_stt)}</span></td>` +
+      `<td>${esc(r.tax_type) || '<span style="color:#71717a">-</span>'}</td>` +
+      `<td class="bno">${esc(r.end_dt) || '<span style="color:#71717a">-</span>'}</td>`;
+    frag.appendChild(tr);
+  });
+  resultBody.appendChild(frag);
+}
+
+function fmtBno(b) { return b.length === 10 ? `${b.slice(0,3)}-${b.slice(3,5)}-${b.slice(5)}` : b; }
+function esc(s) { return String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
+
+// ---------- 엑셀 다운로드 ----------
+$("dlBtn").addEventListener("click", () => downloadExcel(false));
+$("dlBadBtn").addEventListener("click", () => downloadExcel(true));
+
+function downloadExcel(onlyBad) {
+  if (!results.length) return;
+  const filtered = onlyBad ? results.filter((r) => r._cls === "bad" || r._cls === "warn") : results;
+  if (!filtered.length) { toast("해당 조건의 결과가 없습니다.", false); return; }
+
+  // 원본 헤더 + 결과 칼럼을 덧붙인 행 구성
+  const outHeaders = [...headers, "조회_상태", "조회_과세유형", "조회_폐업일"];
+  const aoa = [outHeaders];
+  const wantRows = new Set(filtered.map((r) => r.rowIndex));
+  const resByRow = new Map(results.map((r) => [r.rowIndex, r]));
+  for (let i = 1; i < rows.length; i++) {
+    if (!wantRows.has(i)) continue;
+    const r = resByRow.get(i);
+    const base = headers.map((_, ci) => rows[i][ci] != null ? rows[i][ci] : "");
+    aoa.push([...base, r ? r.b_stt : "", r ? r.tax_type : "", r ? r.end_dt : ""]);
+  }
+
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "조회결과");
+  const stamp = new Date().toISOString().slice(0, 10);
+  XLSX.writeFile(wb, `사업자상태조회_${onlyBad ? "폐업휴업_" : ""}${stamp}.xlsx`);
+  toast(`${filtered.length.toLocaleString()}건 다운로드 완료`);
+}
+</script>
+</body>
+</html>
