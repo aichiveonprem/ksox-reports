@@ -122,17 +122,34 @@
              width: 0%; transition: width .3s ease; }
   .progress-text { font-size: 12px; color: #a1a1aa; margin-top: 8px; }
 
-  /* Stats */
-  .stats { display: grid; grid-template-columns: repeat(2,1fr); gap: 10px; margin-bottom: 18px; }
-  @media (min-width: 600px) { .stats { grid-template-columns: repeat(4,1fr); } }
-  .stat { background: #18181b; border: 1px solid rgba(39,39,42,.7); border-radius: 11px; padding: 14px 16px;
-          animation: fadeUp .4s ease both; }
-  body.light .stat { background: #fff; border-color: #e4e4e7; }
-  .stat .v { font-size: 24px; font-weight: 700; letter-spacing: -.02em; }
-  .stat .k { font-size: 12px; color: #a1a1aa; margin-top: 2px; }
-  body.light .stat .k { color: #71717a; }
-  .stat.ok .v { color: #22c55e; } .stat.warn .v { color: #f59e0b; }
-  .stat.bad .v { color: #ef4444; } .stat.na .v { color: #a1a1aa; }
+  /* Filter chips */
+  .filters-help { font-size: 12px; color: #71717a; margin: 0 0 12px; }
+  .filters { display: flex; flex-wrap: wrap; gap: 9px; align-items: center; margin-bottom: 4px; }
+  .chip { display: inline-flex; align-items: center; gap: 8px; padding: 9px 14px; border-radius: 11px;
+          border: 1px solid rgba(39,39,42,.9); background: #18181b; color: #d4d4d8; cursor: pointer;
+          font-size: 13px; font-weight: 500; font-family: inherit; transition: all .15s ease;
+          animation: fadeUp .35s ease both; }
+  body.light .chip { background: #fff; border-color: #e4e4e7; color: #3f3f46; }
+  .chip:hover { transform: translateY(-1px); border-color: #52525b; }
+  body.light .chip:hover { border-color: #a1a1aa; }
+  .chip:active { transform: scale(.97); }
+  .chip:focus-visible { outline: none; box-shadow: 0 0 0 3px rgba(99,102,241,.4); }
+  .chip b { font-weight: 700; font-variant-numeric: tabular-nums; color: #fafafa; }
+  body.light .chip b { color: #18181b; }
+  .chip .chip-dot { width: 8px; height: 8px; border-radius: 99px; background: #a1a1aa; flex-shrink: 0; }
+  .chip.all .chip-dot { display: none; }
+  .chip.ok .chip-dot { background: #22c55e; } .chip.warn .chip-dot { background: #f59e0b; }
+  .chip.bad .chip-dot { background: #ef4444; } .chip.na .chip-dot { background: #a1a1aa; }
+  .chip.tax .chip-dot { background: #818cf8; border-radius: 2px; }
+  /* active state */
+  .chip.active { border-color: #6366f1; background: rgba(99,102,241,.12); color: #c7d2fe; box-shadow: 0 0 0 1px #6366f1 inset; }
+  body.light .chip.active { background: rgba(99,102,241,.08); color: #4338ca; }
+  .chip.active b { color: inherit; }
+  .chip-sep { width: 1px; height: 22px; background: rgba(63,63,70,.8); margin: 0 2px; flex-shrink: 0; }
+  body.light .chip-sep { background: #e4e4e7; }
+  .dl-hint { font-size: 12px; color: #a1a1aa; align-self: center; }
+  body.light .dl-hint { color: #71717a; }
+  .no-rows td { text-align: center; color: #71717a; padding: 28px; }
 
   /* Table */
   .table-scroll { overflow-x: auto; border-radius: 11px; border: 1px solid rgba(39,39,42,.7); }
@@ -239,10 +256,11 @@
   <!-- STEP 3: Results -->
   <section class="card step3 hidden" id="resultCard" aria-labelledby="s3">
     <div class="step-label" id="s3"><span class="step-num">3</span> 조회 결과</div>
-    <div class="stats" id="stats"></div>
-    <div class="actions" style="margin-top:0;margin-bottom:18px">
+    <p class="filters-help">박스를 클릭하면 해당 사업자만 보고, 그 상태로 엑셀이 다운로드됩니다. 다시 누르면 전체로 돌아갑니다.</p>
+    <div class="filters" id="filters"></div>
+    <div class="actions" style="margin-top:16px;margin-bottom:18px">
       <button class="btn btn-primary" id="dlBtn">⬇ 엑셀 다운로드</button>
-      <button class="btn btn-ghost" id="dlBadBtn">폐업/휴업만 다운로드</button>
+      <span class="dl-hint" id="dlHint"></span>
     </div>
     <div class="table-scroll">
       <table id="resultTable">
@@ -267,8 +285,23 @@ const BATCH_DELAY = 250;    // 배치 간 지연(ms) — 과도한 호출 방지
 let workbook = null;        // SheetJS workbook
 let rows = [];              // 선택 시트의 2차원 배열 (헤더 포함)
 let headers = [];           // 헤더 행
-let results = [];           // 최종 결과 [{bno, raw, b_stt, tax_type, end_dt, _cls}]
+let results = [];           // 최종 결과 [{bno, raw, b_stt, tax_type, end_dt, _cls, _tax}]
 let busy = false;
+let activeFilter = null;    // null(전체) | {g:'status'|'tax', v:'ok'|'simple'...}
+
+// 칩 정의
+const STATUS_DEFS = [
+  { v: "ok", label: "계속사업자", cls: "ok" },
+  { v: "warn", label: "휴업자", cls: "warn" },
+  { v: "bad", label: "폐업자", cls: "bad" },
+  { v: "na", label: "미등록/확인불가", cls: "na" },
+];
+const TAX_DEFS = [
+  { v: "general", label: "일반과세자", cls: "tax" },
+  { v: "simple", label: "간이과세자", cls: "tax" },
+  { v: "exempt", label: "면세사업자", cls: "tax" },
+  { v: "other", label: "기타 과세유형", cls: "tax" },
+];
 
 // ---------- DOM ----------
 const $ = (id) => document.getElementById(id);
@@ -276,7 +309,7 @@ const drop = $("drop"), fileInput = $("fileInput"), fileName = $("fileName");
 const colArea = $("colArea"), sheetSel = $("sheetSel"), colSel = $("colSel"), rowInfo = $("rowInfo");
 const runBtn = $("runBtn"), runLabel = $("runLabel");
 const progWrap = $("progWrap"), bar = $("bar"), progText = $("progText");
-const resultCard = $("resultCard"), resultBody = $("resultBody"), statsEl = $("stats");
+const resultCard = $("resultCard"), resultBody = $("resultBody"), filtersEl = $("filters");
 
 // ---------- 테마 ----------
 (function initTheme() {
@@ -415,6 +448,7 @@ async function runQuery() {
   runLabel.innerHTML = '<span class="spinner"></span> 조회 중…';
   progWrap.classList.remove("hidden");
   results = [];
+  activeFilter = null;
 
   const byBno = new Map(); // 중복 사업자번호 응답 공유
   const uniqueBnos = [...new Set(items.map((x) => x.bno))];
@@ -487,6 +521,7 @@ async function queryBatch(key, bnos) {
 }
 
 // 상태 분류: ok(계속) / warn(휴업) / bad(폐업) / na(미등록·확인불가)
+// 과세유형 분류: general(일반) / simple(간이) / exempt(면세) / other(기타) / ""(미등록)
 function classify(it, d) {
   const code = d.b_stt_cd || "";
   let cls = "na", stt = d.b_stt || "";
@@ -494,59 +529,114 @@ function classify(it, d) {
   else if (code === "02") { cls = "warn"; stt = stt || "휴업자"; }
   else if (code === "03") { cls = "bad"; stt = stt || "폐업자"; }
   else { cls = "na"; stt = stt || (d.tax_type ? d.tax_type : "미등록/확인불가"); }
+
+  const tt = d.tax_type || "";
+  let tax = "";
+  if (cls !== "na") {
+    if (tt.includes("간이")) tax = "simple";
+    else if (tt.includes("일반")) tax = "general";
+    else if (tt.includes("면세")) tax = "exempt";
+    else tax = "other";
+  }
   return {
     rowIndex: it.rowIndex, bno: it.bno, raw: it.raw,
-    b_stt: stt, tax_type: d.tax_type || "", end_dt: d.end_dt || "",
-    _cls: cls,
+    b_stt: stt, tax_type: tt, end_dt: d.end_dt || "",
+    _cls: cls, _tax: tax,
   };
+}
+
+// ---------- 필터 ----------
+function matchFilter(r) {
+  if (!activeFilter) return true;
+  if (activeFilter.g === "status") return r._cls === activeFilter.v;
+  return r._tax === activeFilter.v;
+}
+function getFiltered() { return results.filter(matchFilter); }
+function isActive(filter) {
+  if (filter === null) return !activeFilter;
+  return !!activeFilter && activeFilter.g === filter.g && activeFilter.v === filter.v;
 }
 
 // ---------- 결과 렌더 ----------
 function renderResults() {
-  const c = { ok: 0, warn: 0, bad: 0, na: 0 };
-  results.forEach((r) => c[r._cls]++);
-  statsEl.innerHTML = `
-    <div class="stat ok"><div class="v">${c.ok.toLocaleString()}</div><div class="k">계속사업자</div></div>
-    <div class="stat warn"><div class="v">${c.warn.toLocaleString()}</div><div class="k">휴업자</div></div>
-    <div class="stat bad"><div class="v">${c.bad.toLocaleString()}</div><div class="k">폐업자</div></div>
-    <div class="stat na"><div class="v">${c.na.toLocaleString()}</div><div class="k">미등록/확인불가</div></div>`;
+  const sc = { ok: 0, warn: 0, bad: 0, na: 0 };
+  const tc = { general: 0, simple: 0, exempt: 0, other: 0 };
+  results.forEach((r) => { sc[r._cls]++; if (r._tax) tc[r._tax]++; });
+  renderFilters(sc, tc);
+  renderTable();
+}
 
-  resultBody.innerHTML = "";
-  const frag = document.createDocumentFragment();
-  results.forEach((r, i) => {
-    const tr = document.createElement("tr");
-    tr.innerHTML =
-      `<td style="color:#71717a">${i + 1}</td>` +
-      `<td class="bno">${fmtBno(r.bno)}</td>` +
-      `<td><span class="badge ${r._cls}"><span class="dot"></span>${esc(r.b_stt)}</span></td>` +
-      `<td>${esc(r.tax_type) || '<span style="color:#71717a">-</span>'}</td>` +
-      `<td class="bno">${esc(r.end_dt) || '<span style="color:#71717a">-</span>'}</td>`;
-    frag.appendChild(tr);
+function makeChip(filter, label, count, cls) {
+  const b = document.createElement("button");
+  const act = isActive(filter);
+  b.className = "chip " + cls + (act ? " active" : "");
+  b.setAttribute("aria-pressed", act ? "true" : "false");
+  b.innerHTML = `<span class="chip-dot"></span><span>${label}</span><b>${count.toLocaleString()}</b>`;
+  b.addEventListener("click", () => {
+    if (filter === null) activeFilter = null;
+    else if (isActive(filter)) activeFilter = null; // 같은 칩 다시 누르면 전체로
+    else activeFilter = filter;
+    renderResults();
   });
-  resultBody.appendChild(frag);
+  return b;
+}
+
+function renderFilters(sc, tc) {
+  filtersEl.innerHTML = "";
+  filtersEl.appendChild(makeChip(null, "전체", results.length, "all"));
+  STATUS_DEFS.forEach((d) => {
+    if (sc[d.v] > 0) filtersEl.appendChild(makeChip({ g: "status", v: d.v }, d.label, sc[d.v], d.cls));
+  });
+  const taxShown = TAX_DEFS.filter((d) => tc[d.v] > 0);
+  if (taxShown.length) {
+    const sep = document.createElement("span"); sep.className = "chip-sep"; filtersEl.appendChild(sep);
+    taxShown.forEach((d) => filtersEl.appendChild(makeChip({ g: "tax", v: d.v }, d.label, tc[d.v], d.cls)));
+  }
+}
+
+function renderTable() {
+  const list = getFiltered();
+  resultBody.innerHTML = "";
+  if (!list.length) {
+    resultBody.innerHTML = '<tr class="no-rows"><td colspan="5">해당 조건의 사업자가 없습니다.</td></tr>';
+  } else {
+    const frag = document.createDocumentFragment();
+    list.forEach((r, i) => {
+      const tr = document.createElement("tr");
+      tr.innerHTML =
+        `<td style="color:#71717a">${i + 1}</td>` +
+        `<td class="bno">${fmtBno(r.bno)}</td>` +
+        `<td><span class="badge ${r._cls}"><span class="dot"></span>${esc(r.b_stt)}</span></td>` +
+        `<td>${esc(r.tax_type) || '<span style="color:#71717a">-</span>'}</td>` +
+        `<td class="bno">${esc(r.end_dt) || '<span style="color:#71717a">-</span>'}</td>`;
+      frag.appendChild(tr);
+    });
+    resultBody.appendChild(frag);
+  }
+  const label = activeFilter ? "현재 필터" : "전체";
+  $("dlHint").textContent = `${label} ${list.length.toLocaleString()}건이 다운로드됩니다`;
 }
 
 function fmtBno(b) { return b.length === 10 ? `${b.slice(0,3)}-${b.slice(3,5)}-${b.slice(5)}` : b; }
 function esc(s) { return String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
 
-// ---------- 엑셀 다운로드 ----------
-$("dlBtn").addEventListener("click", () => downloadExcel(false));
-$("dlBadBtn").addEventListener("click", () => downloadExcel(true));
+// ---------- 엑셀 다운로드 (현재 필터 기준, 원본 칼럼 + 결과 칼럼 추가) ----------
+$("dlBtn").addEventListener("click", downloadExcel);
 
-function downloadExcel(onlyBad) {
+function downloadExcel() {
   if (!results.length) return;
-  const filtered = onlyBad ? results.filter((r) => r._cls === "bad" || r._cls === "warn") : results;
-  if (!filtered.length) { toast("해당 조건의 결과가 없습니다.", false); return; }
+  const filtered = getFiltered();
+  if (!filtered.length) { toast("다운로드할 결과가 없습니다.", false); return; }
 
-  // 원본 헤더 + 결과 칼럼을 덧붙인 행 구성
+  // 원본 시트의 모든 칼럼(헤더)을 그대로 두고, 우측에 조회 결과 3칼럼만 추가
   const outHeaders = [...headers, "조회_상태", "조회_과세유형", "조회_폐업일"];
   const aoa = [outHeaders];
   const wantRows = new Set(filtered.map((r) => r.rowIndex));
   const resByRow = new Map(results.map((r) => [r.rowIndex, r]));
   for (let i = 1; i < rows.length; i++) {
-    if (!wantRows.has(i)) continue;
+    if (!wantRows.has(i)) continue;          // 현재 필터에 포함된 원본 행만
     const r = resByRow.get(i);
-    const base = headers.map((_, ci) => rows[i][ci] != null ? rows[i][ci] : "");
+    const base = headers.map((_, ci) => rows[i][ci] != null ? rows[i][ci] : "");  // 원본 칼럼 보존
     aoa.push([...base, r ? r.b_stt : "", r ? r.tax_type : "", r ? r.end_dt : ""]);
   }
 
@@ -554,8 +644,16 @@ function downloadExcel(onlyBad) {
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, "조회결과");
   const stamp = new Date().toISOString().slice(0, 10);
-  XLSX.writeFile(wb, `사업자상태조회_${onlyBad ? "폐업휴업_" : ""}${stamp}.xlsx`);
+  const tag = activeFilter ? "_" + filterTag() : "";
+  XLSX.writeFile(wb, `사업자상태조회${tag}_${stamp}.xlsx`);
   toast(`${filtered.length.toLocaleString()}건 다운로드 완료`);
+}
+
+function filterTag() {
+  if (!activeFilter) return "";
+  const all = activeFilter.g === "status" ? STATUS_DEFS : TAX_DEFS;
+  const d = all.find((x) => x.v === activeFilter.v);
+  return d ? d.label.replace(/[\/\s]/g, "") : activeFilter.v;
 }
 </script>
 </body>
